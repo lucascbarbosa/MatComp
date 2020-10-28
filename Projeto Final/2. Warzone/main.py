@@ -67,8 +67,10 @@ class Environment:
         
         #Skydiving
         self.pixels = [] #array with pixels corresponding to each point (d,z)
+        self.freq = 0.1
+        self.time = 0.0
         self.currentd = 0.0
-
+        self.currentz = self.height
 
     def render_plane(self):
         #map
@@ -143,71 +145,67 @@ class Environment:
         def k(theta):
             return self.k0*abs(math.cos(theta))+self.gamma
         
-        def z(r):
+        def z_dive(r):
             return ((-self.m*self.g/(k(self.theta))**2)*(self.m*(math.exp(-(k(self.theta)*r/(self.m*self.player_vel)))-1)+k(self.theta)*r/self.player_vel))+self.height
         
-        def z_prime(r):
+        def z_dive_prime(r):
             return (self.m*self.g/self.player_vel)*((math.exp(-k(self.theta)/(self.m*self.player_vel))-1)/(self.gamma+self.k0*math.cos(self.theta)))
         
+        def z_parachute(r):
+            return (2.0*self.m*self.g/(10*(self.k0+self.gamma)*self.player_vel))*(self.d-r)
+        
+        def z_parachute_prime(r):
+            return (2.0*self.m*self.g/(10*(self.k0+self.gamma)*self.player_vel))
+
         N = 100
-        tol = 1e-3
+        tol = 1e-5
         count = 0
         p = .1
         dif = 1
-        dist = 0.1
+        dist = self.d/2
         
        
         while count < N and dif > tol:
-            print(f'dist = {dist}, z(dist) = {z(dist)}, z_prime(dist) = {z_prime(dist)}')
+            print(f'dist = {dist}, z_dive(dist)-z_parachute(dist) = {z_dive(dist)-z_parachute(dist)}, z_dive_prime(dist)-z_parachute_prime(dist) = {z_dive_prime(dist)-z_parachute_prime(dist)}')
             clone = dist
-            dist -= p*z(dist)/z_prime(dist)
+            dist -= p*(z_dive(dist)-z_parachute(dist))/(z_dive_prime(dist)-z_parachute_prime(dist))
             dif = abs(clone-dist)
             count += 1
 
-        if dist > self.d:
-            dist = self.d
-        self.dist_parachute = (self.d-dist)
+        print(f'parachute_dist = {dist}')
 
-        print(f'parachute_dist = {self.dist_parachute}')
+        return dist
 
     def render_jump(self):
        
-        def k(theta,k0,gamma):
-            return k0*abs(math.cos(theta))+gamma
+        def z_dive(t):
+            return ((-self.m*self.g/(self.k_dive)**2)*(self.m*(math.exp(-(self.k_dive*t/self.m))-1)+self.k_dive*t))+self.height
+        
+        def z_parachute(t):
+            return (self.m*self.g/self.k_parachute)
 
-        def z(r,k,v):
-            return ((-self.m*self.g/(k**2))*(self.m*(math.exp(-(k*r/(self.m*v)))-1)+k*r/v))+self.height
-        
-        
 
-        k_dive = k(self.theta,self.k0,self.gamma)
-        k_parachute = k(self.theta_parachute,self.k0*self.alfa,self.alfa*self.gamma)
-        
-        chute = self.theta == 0.
-
-        
-        if chute:
-            currentz = z(self.currentd,k_parachute,self.player_vel/2)
-            if self.currentd >= self.dist_parachute:
-                chute = False
-                print('SOLTA')
-            self.currentd += (self.player_vel/200.)
+        if not self.chute:
+            self.currentd += self.player_vel*self.freq
+            self.currentz = z_dive(self.time)
+            self.time += self.freq
+            if self.currentd >= self.dist_parachute and self.need_chute:
+                self.chute = True
+                print('Open parachute!')
             
-
         else:
-            currentz = z(self.currentd,k_parachute,self.player_vel)
-            self.currentd += self.player_vel/100.
+            self.currentd += (self.player_vel/2.0)*self.freq
+            self.currentz -= (self.m*self.g/self.k_parachute)*self.freq
+            self.time += self.freq
 
-            
-
-        if currentz*100 <0.0:
+        if self.currentz*100 <0.0:
             self.crashed = True
             return None
 
         if self.currentd >= self.d:
             self.currentd = self.d
 
-        self.pixels.append((round(300+(500*self.currentd//self.d)),round(600-(500*currentz//self.height))))
+        self.pixels.append((round(300+(500*self.currentd//self.d)),round(600-(500*self.currentz//self.height))))
         
         #Draw axis
         pg.draw.line(self.gameDisplay,self.white,(300,50),(300,600),2)
@@ -216,7 +214,7 @@ class Environment:
         #Draw z vs d curve
         pg.draw.lines(self.gameDisplay,self.pink,False, self.pixels,1)
         
-        print(f'distance = {round(self.currentd*100)} PosZ = {round(currentz*100)}')
+        print(f'distance = {round(self.currentd*100)} PosZ = {round(self.currentz*100)}')
 
 
 
@@ -227,10 +225,33 @@ class Environment:
         self.d = math.sqrt((self.jump_pointx-self.targetx)**2+(self.jump_pointy-self.targety)**2)/100.
         self.theta = self.get_theta(self.k0,self.gamma,self.height,
                                     self.d,self.player_vel)
-        self.pixels.append((300,600-self.height))
-        self.get_dist_parachute()
-        self.theta_parachute = self.get_theta(self.alfa*self.k0,self.alfa*self.gamma,self.height, 
-                                              self.dist_parachute,self.player_vel/2)
+
+        def k(theta,k0,gamma):
+            return k0*abs(math.cos(theta))+gamma
+
+        self.k_dive = k(self.theta,self.k0,self.gamma)
+        self.k_parachute = k(0.0,self.k0*self.alfa,self.alfa*self.gamma)
+
+        if self.m*self.g*self.d*2.0/(self.player_vel*self.k_parachute) > self.height:
+
+            self.crashed = True
+            print("The target is too far!!!")
+
+        else:
+
+            if self.theta == 0.0:
+                self.need_chute = True
+                self.dist_parachute = self.get_dist_parachute()
+
+            else:
+                self.need_chute = False
+                self.dist_parachute = self.d+1
+            
+            
+
+            self.pixels.append((300,600-self.height))
+            self.chute = False
+
 
             
 class Player:
